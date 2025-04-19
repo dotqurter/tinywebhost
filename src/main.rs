@@ -17,44 +17,50 @@ fn handle_connection(mut stream: TcpStream) {
         .take_while(|line| !line.is_empty())
         .collect();
 
-    let requested_file = http_request[0]
+    let requested_file = if !http_request.is_empty() {
+        http_request[0]
         .strip_prefix("GET ").unwrap()
-        .strip_suffix(" HTTP/1.1").unwrap();
+        .strip_suffix(" HTTP/1.1").unwrap()
+    } else { return };
 
     let mut file: String = requested_file.to_string();
     if requested_file == "/" {
         file = String::from("/index.html");
     }
+
     let err_404_page = format!("{ROOT_FOLDER}/404.html");
     let path = format!("{ROOT_FOLDER}{file}");
-    let (status_line, data) = match fs::read_to_string(&path) {
+    
+    let (status_line, data) = match fs::read(&path) {
         Ok(data) => { 
-            ( "HTTP/1.1 200 OK", data )
+            ( "HTTP/1.1 200 OK\r\n", data )
         },
         Err(err) => {
             match err.kind() {
                 ErrorKind::NotFound => { 
                     println!("Connection requested nonexistent file, {}", path); 
                     if file.ends_with(".html") {
-                        ( "HTTP/1.1 404 NOT FOUND", fs::read_to_string(err_404_page).unwrap() )
+                        ( "HTTP/1.1 404 NOT FOUND\r\n", fs::read(err_404_page).unwrap() )
                     } else {
-                        ( "HTTP/1.1 404 NOT FOUND", String::from("") ) 
+                        ( "HTTP/1.1 404 NOT FOUND\r\n", Vec::new() ) 
                     }
                 },
                 _ => {
-                    ( "HTTP/1.1 500 INTERNAL SERVER ERROR", String::from("") )
+                    ( "HTTP/1.1 500 INTERNAL SERVER ERROR\r\n", Vec::new() )
                 }
             }
         },  
     };
 
     let length = data.len();
-    let mut contents = String::from("");
+    let mut contents: Vec<u8> = Vec::new();
 
     if length > 0 {
-        contents = format!("Content-Length: {length}\r\n\r\n{data}");
+        contents = format!("Content-Length: {length}\r\n\r\n").into();
+        contents.extend(data);
     }
 
-    let response = format!("{status_line}\r\n{contents}");
-    stream.write_all(response.as_bytes()).unwrap();
+    let mut response: Vec<u8> = status_line.into();
+    response.extend(contents);
+    stream.write_all(response.as_slice()).unwrap();
 }
