@@ -17,24 +17,28 @@ fn handle_connection(mut stream: TcpStream) {
         .take_while(|line| !line.is_empty())
         .collect();
 
-    let file = http_request[0]
+    let requested_file = http_request[0]
         .strip_prefix("GET ").unwrap()
         .strip_suffix(" HTTP/1.1").unwrap();
+
+    let mut file: String = requested_file.to_string();
+    if requested_file == "/" {
+        file = String::from("/index.html");
+    }
         
     let path = format!("{ROOT_FOLDER}{file}");
-
     let (status_line, data) = match fs::read_to_string(&path) {
         Ok(data) => { 
-            ( "HTTP/1.1 200 OK".to_string(), data )
+            ( String::from("HTTP/1.1 200 OK"), data )
         },
         _ => { 
             println!("Connection requested nonexistent file, {}", path); 
-            ( "HTTP/1.1 404 NOT FOUND".to_string(), "".to_string() ) 
+            ( String::from("HTTP/1.1 404 NOT FOUND"), String::from("") ) 
         },
     };
 
     let length = data.len();
-    let mut contents = "".to_string();
+    let mut contents = String::from("");
 
     if length > 0 {
         contents = format!("Content-Length: {length}\r\n\r\n{data}");
