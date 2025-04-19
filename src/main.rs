@@ -1,5 +1,5 @@
-use std::{ io::{prelude::*, BufReader}, net::{TcpListener, TcpStream}, fs, };
-static ROOT_FOLDER: &str = "C:/Users/echo/code/website";
+use std::{ io::{prelude::*, BufReader, ErrorKind}, net::{TcpListener, TcpStream}, fs, };
+const ROOT_FOLDER: &str = "/var/web";
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:80").unwrap();
@@ -25,16 +25,27 @@ fn handle_connection(mut stream: TcpStream) {
     if requested_file == "/" {
         file = String::from("/index.html");
     }
-        
+    let err_404_page = format!("{ROOT_FOLDER}/404.html");
     let path = format!("{ROOT_FOLDER}{file}");
     let (status_line, data) = match fs::read_to_string(&path) {
         Ok(data) => { 
-            ( String::from("HTTP/1.1 200 OK"), data )
+            ( "HTTP/1.1 200 OK", data )
         },
-        _ => { 
-            println!("Connection requested nonexistent file, {}", path); 
-            ( String::from("HTTP/1.1 404 NOT FOUND"), String::from("") ) 
-        },
+        Err(err) => {
+            match err.kind() {
+                ErrorKind::NotFound => { 
+                    println!("Connection requested nonexistent file, {}", path); 
+                    if file.ends_with(".html") {
+                        ( "HTTP/1.1 404 NOT FOUND", fs::read_to_string(err_404_page).unwrap() )
+                    } else {
+                        ( "HTTP/1.1 404 NOT FOUND", String::from("") ) 
+                    }
+                },
+                _ => {
+                    ( "HTTP/1.1 500 INTERNAL SERVER ERROR", String::from("") )
+                }
+            }
+        },  
     };
 
     let length = data.len();
