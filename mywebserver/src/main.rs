@@ -1,88 +1,87 @@
-use std::{ fs, io::{prelude::*, ErrorKind}, net::{TcpListener, TcpStream}, thread};
-use tinyhttpparser::{ HttpMethod, HttpMessage };
-const ROOT_FOLDER: &str = "/var/web";
-const IP_ADDR: &str = "127.0.0.1:80";
+use std::{ env, fs, io::{prelude::*, ErrorKind}, net::TcpListener, thread, sync::OnceLock };
+use tinyhttp::{ HttpMethod::*, HttpRequest, HttpResponse, HttpResponseBuilder };
+
+fn root_folder() -> &'static str {
+    static ROOT_FOLDER: OnceLock<String> = OnceLock::new();
+    ROOT_FOLDER.get_or_init(|| env::var("ROOT_FOLDER").unwrap_or(r"/var/web".to_owned()))
+}
+fn ip_addr() -> &'static str {
+    static IP_ADDR: OnceLock<String> = OnceLock::new();
+    IP_ADDR.get_or_init(|| env::var("IP_ADDR").unwrap_or(r"0.0.0.0:80".to_owned()))
+}
 
 fn main() {
-    let listener = TcpListener::bind(IP_ADDR)
-        .expect( format!("Failed to bind listener to {IP_ADDR}").as_str() );
+    let ip_addr = ip_addr();
+    let listener = TcpListener::bind(&ip_addr)
+        .expect( format!("Failed to bind listener to {ip_addr}").as_str() );
 
     for stream in listener.incoming() {
-        let stream = stream.unwrap();
-        thread::spawn(|| {
-            handle_connection(stream);
+        let mut stream = match stream {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("{e}");
+                return;
+            }
+        };
+        thread::spawn(move || {
+            let http_request: HttpRequest = match HttpRequest::from_stream(&stream) {
+                Some(res) => res,
+                None => { return }
+            };
+            
+            let response_message = handle_request(http_request);
+            stream.write_all(response_message.build().as_slice()).unwrap();
         });
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let http_request: HttpMessage = match HttpMessage::from_stream(&stream) {
-        Some(res) => res,
-        None => { return }
-    };
-    //Example of using get_header
-    // {
-    //     let header_test = "Accept";
-    //     println!("Test == {header_test}: {}", http_request.get_header(header_test).unwrap());
-    // }
-    let response_message = handle_request(http_request);
-    stream.write_all(response_message.finalize()).unwrap();
-}
-
-fn handle_get_request(file: &str) -> HttpMessage {
-    let path = format!("{ROOT_FOLDER}{file}");
-    let mut message = HttpMessage::builder();
-    match fs::read(&path) {
-        Ok(data) => {
-            let length = data.len();
-            message.status_line("HTTP/1.1 200 OK");
-            message.header(format!("Content-Length: {length}"));
-            message.header(format!("Server: mywebserver"));
-            message.data(data);
-        },
-        Err(err) => {
-            eprintln!("Error opening {path}: {err}");
-            match err.kind() {
-                ErrorKind::NotFound => {
-                    message.status_line("HTTP/1.1 404 NOT FOUND");
-                    match fs::read( format!("{ROOT_FOLDER}/404.html")) {
-                        Ok(data) => {
-                            let length = data.len();
-                            message.header(format!("Content-Length: {length}"));
-                            message.data(data);
-                        },
-                        _ => {},
-                    }
-                },
-                _ => {
-                    eprintln!("Unhandled error: {}", err);
-                    message.status_line("HTTP/1.1 500 INTERNAL SERVER ERROR");
-                }
-            }
-        },  
-    }
-    message.build()
-}
-
-fn handle_request(message: HttpMessage) -> HttpMessage {
-    use HttpMethod::*;
-    match message.method() {
+fn handle_request(message: HttpRequest) -> HttpResponse {
+    let mut builder = HttpResponseBuilder::new();
+    let root_folder = root_folder();
+    match message.method().unwrap() {
         Get => {
-            let binding = message.startline();
+            let binding = message.start_line;
             let requested_file = binding.split(' ').nth(1).unwrap();
 
-            let file = if requested_file == "/" {
-                "/index.html"
-            } else {
-                requested_file
+            let file = match requested_file {
+                "/" => "/index.html",
+                _ => requested_file,
             };
 
-            handle_get_request(file)
+            let path = format!("{root_folder}/{file}");
+            match fs::read(&path) {
+                Ok(data) => {
+                    let length = data.len();
+                    builder.status_line("HTTP/1.1 200 OK");
+                    builder.header(format!("Content-Length: {length}"));
+                    builder.header(format!("Server: mywebserver"));
+                    builder.body(data);
+                },
+                Err(err) => {
+                    eprintln!("Error opening {path}: {err}");
+                    match err.kind() {
+                        ErrorKind::NotFound => {
+                            builder.status_line("HTTP/1.1 404 NOT FOUND");
+                            match fs::read( format!("{root_folder}/404.html")) {
+                                Ok(data) => {
+                                    let length = data.len();
+                                    builder.header(format!("Content-Length: {length}"));
+                                    builder.body(data);
+                                },
+                                _ => {},
+                            }
+                        },
+                        _ => {
+                            eprintln!("Unhandled error: {}", err);
+                            builder.status_line("HTTP/1.1 500 INTERNAL SERVER ERROR");
+                        }
+                    }
+                },  
+            }
         },
         _ => {
-            let mut msg = HttpMessage::builder();
-            msg.status_line("HTTP/1.1 405 Method Not Allowed");
-            msg.build()
+            builder.status_line("HTTP/1.1 405 Method Not Allowed");
         },
     }
+    builder.build()
 }
