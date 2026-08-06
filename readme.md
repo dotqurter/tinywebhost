@@ -10,4 +10,4 @@ To set the root folder, run the program with the `ROOT_FOLDER` environment varia
 ### Example
 Powershell: `$Env:ROOT_FOLDER="C:\website\"; $Env:IP_ADDR="127.0.0.1:80"; cargo run --release`
 
-Bash: `$ROOT_FOLDER="/var/web/" $IP_ADDR="127.0.0.1:80" cargo run --release`
+Bash: `ROOT_FOLDER="/var/web/" IP_ADDR="127.0.0.1:80" cargo run --release`

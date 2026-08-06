@@ -35,20 +35,43 @@ fn main() {
     }
 }
 
+use std::path::Path;
 fn handle_request(message: HttpRequest) -> HttpResponse {
     let mut builder = HttpResponseBuilder::new();
-    let root_folder = root_folder();
+
+    let root_folder = Path::new(root_folder())
+        .canonicalize().expect("Couldn't canonicalize the root folder");
+
     match message.method().unwrap() {
         Get => {
             let binding = message.start_line;
             let requested_file = binding.split(' ').nth(1).unwrap();
 
+            let mut path = root_folder.to_path_buf();
+
+            // clean the leading forwardslash
             let file = match requested_file {
-                "/" => "/index.html",
-                _ => requested_file,
+                "/" => "index.html",
+                _ => requested_file.get(1..).unwrap(),
             };
 
-            let path = format!("{root_folder}/{file}");
+            path.push(file);
+            let path = match path.canonicalize() {
+                Ok(path) => path,
+                Err(_) => {
+                    eprintln!("Couldn't canonicalize path: {path:?}");
+                    builder.status_line("HTTP/1.1 404 Not Found");
+                    return builder.build();
+                }
+            };
+
+            // Avoid path traversal issues
+            if !path.starts_with(&root_folder) {
+                eprintln!("Attempted to traverse outside path, looking for file {path:?}");
+                builder.status_line("HTTP/1.1 400 Bad Request");
+                return builder.build();
+            }
+
             match fs::read(&path) {
                 Ok(data) => {
                     let length = data.len();
@@ -58,22 +81,19 @@ fn handle_request(message: HttpRequest) -> HttpResponse {
                     builder.body(data);
                 },
                 Err(err) => {
-                    eprintln!("Error opening {path}: {err}");
+                    eprintln!("Error opening {path:?}: {err}");
                     match err.kind() {
                         ErrorKind::NotFound => {
-                            builder.status_line("HTTP/1.1 404 NOT FOUND");
-                            match fs::read( format!("{root_folder}/404.html")) {
-                                Ok(data) => {
-                                    let length = data.len();
-                                    builder.header(format!("Content-Length: {length}"));
-                                    builder.body(data);
-                                },
-                                _ => {},
+                            builder.status_line("HTTP/1.1 404 Not Found");
+                            if let Ok(errpage) = fs::read(&root_folder.with_file_name("404.html")) {
+                                let length = errpage.len();
+                                builder.header(format!("Content-Length: {length}"));
+                                builder.body(errpage);
                             }
                         },
                         _ => {
                             eprintln!("Unhandled error: {}", err);
-                            builder.status_line("HTTP/1.1 500 INTERNAL SERVER ERROR");
+                            builder.status_line("HTTP/1.1 501 Not Implemented");
                         }
                     }
                 },  
